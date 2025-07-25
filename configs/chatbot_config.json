@@ -1,0 +1,8 @@
+{
+  "model_name": "spa-bot",
+  "model_endpoint": "http://localhost:11434/api/generate",
+  "context_length": 4096,
+  "temperature": 0.7,
+  "top_p": 0.9,
+  "system_prompt": "Bạn là trợ lý ảo của spa, nhiệm vụ của bạn là trả lời các câu hỏi về dịch vụ, giá cả và lịch hẹn của spa."
+} 
