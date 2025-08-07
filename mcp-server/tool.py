@@ -82,7 +82,7 @@ class Tools:
         :return: A string containing the names of all tables.
         """
         print("Listing all tables in the database")
-        engine = self._get_engine()  # 动态创建引擎
+        engine = self._get_engine()  
         try:
             with engine.connect() as conn:
                 if self.valves.db_type == "mysql":
@@ -172,7 +172,7 @@ class Tools:
         :return: A string describing the data schema of the table.
         """
         print(f"Describing table: {table_name}")
-        engine = self._get_engine()  # 动态创建引擎
+        engine = self._get_engine()  
         try:
             with engine.connect() as conn:
                 if self.valves.db_type == "mysql":
@@ -247,6 +247,181 @@ class Tools:
         except SQLAlchemyError as e:
             return f"Error describing table: {str(e)}"
 
+    def analyze_customer_metrics(self, time_range: str = "last_30_days") -> str:
+        """
+        Phân tích toàn diện về khách hàng, bao gồm:
+        - Thống kê khách theo care_priority (normal/high/urgent)
+        - Tỷ lệ khách theo gender và độ tuổi
+        - Top khách hàng có số buổi điều trị nhiều nhất
+        - Khách hàng có debt cao nhất
+        - Tỷ lệ khách theo trạng thái (active/inactive/banned)
+        
+        Args:
+            time_range: Khoảng thời gian phân tích (default: "last_30_days")
+                       Có thể là: "last_7_days", "last_30_days", "last_90_days", "last_365_days"
+        
+        Returns:
+            String chứa kết quả phân tích dạng CSV
+        """
+        # Chuyển đổi time_range thành interval PostgreSQL
+        time_intervals = {
+            "last_7_days": "7 days",
+            "last_30_days": "30 days",
+            "last_90_days": "90 days",
+            "last_365_days": "365 days"
+        }
+        interval = time_intervals.get(time_range, "30 days")
+        
+        query = """
+        WITH customer_stats AS (
+            SELECT 
+                c.id,
+                c.name,
+                c.care_priority,
+                c.gender,
+                c.status,
+                c.debt,
+                COUNT(DISTINCT t.id) as treatment_count,
+                DATE_PART('year', AGE(CURRENT_DATE, c.birth_date)) as age,
+                COUNT(DISTINCT a.id) as appointment_count,
+                SUM(CASE WHEN a.status = 'cancelled' THEN 1 ELSE 0 END) as cancelled_appointments
+            FROM customers c
+            LEFT JOIN treatments t ON c.id = t.customer_id
+            LEFT JOIN appointments a ON c.id = a.customer_id
+            WHERE c.created_at >= NOW() - INTERVAL :interval
+            GROUP BY c.id, c.name, c.care_priority, c.gender, c.status, c.debt, c.birth_date
+        ),
+        age_groups AS (
+            SELECT 
+                CASE 
+                    WHEN age < 18 THEN 'Under 18'
+                    WHEN age BETWEEN 18 AND 25 THEN '18-25'
+                    WHEN age BETWEEN 26 AND 35 THEN '26-35'
+                    WHEN age BETWEEN 36 AND 50 THEN '36-50'
+                    ELSE 'Over 50'
+                END as age_group,
+                COUNT(*) as count
+            FROM customer_stats
+            GROUP BY 
+                CASE 
+                    WHEN age < 18 THEN 'Under 18'
+                    WHEN age BETWEEN 18 AND 25 THEN '18-25'
+                    WHEN age BETWEEN 26 AND 35 THEN '26-35'
+                    WHEN age BETWEEN 36 AND 50 THEN '36-50'
+                    ELSE 'Over 50'
+                END
+        ),
+        priority_stats AS (
+            SELECT 
+                care_priority,
+                COUNT(*) as count,
+                CAST(AVG(treatment_count) AS NUMERIC(10,2)) as avg_treatments,
+                CAST(AVG(debt) AS NUMERIC(10,2)) as avg_debt
+            FROM customer_stats
+            GROUP BY care_priority
+        ),
+        gender_stats AS (
+            SELECT 
+                gender,
+                COUNT(*) as count,
+                CAST(AVG(age) AS NUMERIC(10,2)) as avg_age
+            FROM customer_stats
+            GROUP BY gender
+        ),
+        top_customers AS (
+            SELECT 
+                name,
+                treatment_count,
+                appointment_count,
+                cancelled_appointments,
+                debt,
+                care_priority
+            FROM customer_stats
+            ORDER BY treatment_count DESC, debt DESC
+            LIMIT 10
+        )
+        SELECT 
+            'Priority Stats' as category,
+            care_priority::text as metric,
+            count::text as value,
+            COALESCE(avg_treatments::text, '-') as additional_info1,
+            COALESCE(avg_debt::text, '-') as additional_info2,
+            '-' as additional_info3
+        FROM priority_stats
+        UNION ALL
+        SELECT 
+            'Age Stats' as category,
+            age_group as metric,
+            count::text as value,
+            '-' as additional_info1,
+            '-' as additional_info2,
+            '-' as additional_info3
+        FROM age_groups
+        UNION ALL
+        SELECT 
+            'Gender Stats' as category,
+            gender::text as metric,
+            count::text as value,
+            COALESCE(avg_age::text, '-') as additional_info1,
+            '-' as additional_info2,
+            '-' as additional_info3
+        FROM gender_stats
+        UNION ALL
+        SELECT 
+            'Top Customers' as category,
+            name as metric,
+            treatment_count::text as value,
+            COALESCE(appointment_count::text, '0') as additional_info1,
+            COALESCE(cancelled_appointments::text, '0') as additional_info2,
+            COALESCE(debt::text, '0') as additional_info3
+        FROM top_customers
+        ORDER BY category, metric;
+        """
+        
+        try:
+            with self._get_engine().connect() as conn:
+                result = conn.execute(text(query), {"interval": interval})
+                rows = result.fetchall()
+                
+                if not rows:
+                    return "Không có dữ liệu phân tích cho khoảng thời gian này."
+
+                # Tạo header cho từng phần
+                csv_data = "=== BÁO CÁO PHÂN TÍCH KHÁCH HÀNG ===\n"
+                csv_data += f"Khoảng thời gian: {time_range}\n\n"
+                
+                current_category = None
+                for row in rows:
+                    if current_category != row[0]:
+                        current_category = row[0]
+                        if current_category == 'Priority Stats':
+                            csv_data += "\n1. THỐNG KÊ THEO ĐỘ ƯU TIÊN\n"
+                            csv_data += "Độ ưu tiên,Số lượng,Trung bình số liệu trình,Trung bình công nợ\n"
+                        elif current_category == 'Age Stats':
+                            csv_data += "\n2. THỐNG KÊ THEO ĐỘ TUỔI\n"
+                            csv_data += "Nhóm tuổi,Số lượng\n"
+                        elif current_category == 'Gender Stats':
+                            csv_data += "\n3. THỐNG KÊ THEO GIỚI TÍNH\n"
+                            csv_data += "Giới tính,Số lượng,Độ tuổi trung bình\n"
+                        elif current_category == 'Top Customers':
+                            csv_data += "\n4. TOP KHÁCH HÀNG\n"
+                            csv_data += "Tên khách hàng,Số liệu trình,Số lần đặt hẹn,Số lần hủy hẹn,Công nợ\n"
+                    
+                    # Format dữ liệu theo từng category
+                    if current_category == 'Priority Stats':
+                        csv_data += f"{row[1]},{row[2]},{row[3]},{row[4]}\n"
+                    elif current_category == 'Age Stats':
+                        csv_data += f"{row[1]},{row[2]}\n"
+                    elif current_category == 'Gender Stats':
+                        csv_data += f"{row[1]},{row[2]},{row[3]}\n"
+                    elif current_category == 'Top Customers':
+                        csv_data += f"{row[1]},{row[2]},{row[3]},{row[4]},{row[5]}\n"
+                
+                return csv_data
+                
+        except SQLAlchemyError as e:
+            return f"Lỗi khi phân tích dữ liệu khách hàng: {str(e)}"
+
     def execute_read_query(self, query: str) -> str:
         """
         Execute a read query and return the result in CSV format.
@@ -276,7 +451,7 @@ class Tools:
             if re.search(rf"\b{keyword}\b", normalized_query):
                 return f"Error: Query contains a sensitive keyword '{keyword}'. Only read operations are allowed."
 
-        engine = self._get_engine()  # 动态创建引擎
+        engine = self._get_engine()  
         try:
             with engine.connect() as conn:
                 result = conn.execute(text(query))
