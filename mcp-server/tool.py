@@ -422,6 +422,160 @@ class Tools:
         except SQLAlchemyError as e:
             return f"Lỗi khi phân tích dữ liệu khách hàng: {str(e)}"
 
+    def track_treatment_progress(self, customer_identifier: str = None, treatment_id: str = None) -> str:
+        """
+        Theo dõi tiến trình điều trị của khách hàng.
+        
+        Args:
+            customer_identifier: Tên hoặc số điện thoại của khách hàng
+                               - Nếu là số điện thoại: có thể tìm một phần (ví dụ: "0909" sẽ tìm được "0909123456")
+                               - Nếu là tên: không phân biệt hoa thường, có thể tìm một phần tên
+            treatment_id: ID của liệu trình cụ thể (nếu muốn xem chi tiết 1 liệu trình)
+            
+        Returns:
+            String chứa báo cáo tiến trình điều trị dạng CSV, bao gồm:
+            - Thông tin tổng quan về các liệu trình
+            - Chi tiết từng buổi điều trị
+            - Hình ảnh trước/sau
+            - Phản ứng và tình trạng da của khách
+        """
+        try:
+            with self._get_engine().connect() as conn:
+                # 1. Query thông minh để tìm khách hàng
+                find_customer_query = """
+                SELECT 
+                    id as customer_id,
+                    name as customer_name,
+                    phone,
+                    email,
+                    care_priority::text
+                FROM customers c
+                WHERE 
+                    CASE 
+                        WHEN :identifier ~ '^[0-9]+$' 
+                        THEN c.phone LIKE '%' || :identifier || '%'
+                        ELSE LOWER(c.name) LIKE '%' || LOWER(:identifier) || '%'
+                    END
+                ORDER BY 
+                    CASE 
+                        WHEN c.phone = :identifier THEN 0
+                        WHEN c.phone LIKE :identifier || '%' THEN 1
+                        WHEN c.phone LIKE '%' || :identifier THEN 2
+                        WHEN LOWER(c.name) = LOWER(:identifier) THEN 3
+                        ELSE 4 
+                    END,
+                    c.created_at DESC
+                LIMIT 1;
+                """
+                
+                # 2. Query tổng quan các liệu trình
+                treatments_query = """
+                SELECT 
+                    t.id as treatment_id,
+                    t.treatment_name,
+                    t.total_sessions,
+                    t.current_session,
+                    CAST((t.current_session::float / t.total_sessions * 100) AS NUMERIC(5,2)) as completion_percentage,
+                    t.start_date::text,
+                    COALESCE(t.end_date::text, 'Đang điều trị') as end_date,
+                    CAST(t.price AS TEXT) as price,
+                    t.status,
+                    t.notes
+                FROM treatments t
+                WHERE t.customer_id = :customer_id
+                """
+                
+                if treatment_id:
+                    treatments_query += " AND t.id = :treatment_id"
+                
+                treatments_query += " ORDER BY t.start_date DESC;"
+                
+                # 3. Query chi tiết các buổi điều trị
+                sessions_query = """
+                WITH SessionImages AS (
+                    SELECT 
+                        session_id,
+                        STRING_AGG(
+                            CASE 
+                                WHEN image_type = 'before' THEN image_url
+                            END, 
+                            ', '
+                        ) as before_images,
+                        STRING_AGG(
+                            CASE 
+                                WHEN image_type = 'after' THEN image_url
+                            END, 
+                            ', '
+                        ) as after_images
+                    FROM treatment_images
+                    GROUP BY session_id
+                )
+                SELECT 
+                    ts.session_number,
+                    ts.session_date::text,
+                    COALESCE(ts.products_used, '-') as products_used,
+                    COALESCE(ts.skin_condition, '-') as skin_condition,
+                    COALESCE(ts.reaction, '-') as reaction,
+                    COALESCE(ts.next_appointment::text, '-') as next_appointment,
+                    COALESCE(ts.notes, '-') as session_notes,
+                    COALESCE(ts.products_sold, '-') as products_sold,
+                    COALESCE(ts.after_sales_care, '-') as after_sales_care,
+                    COALESCE(si.before_images, '-') as before_images,
+                    COALESCE(si.after_images, '-') as after_images
+                FROM treatment_sessions ts
+                LEFT JOIN SessionImages si ON ts.id = si.session_id
+                WHERE ts.treatment_id = :treatment_id
+                ORDER BY ts.session_number;
+                """
+                
+                # Thực hiện queries
+                # Tìm khách hàng
+                params = {"identifier": customer_identifier, "treatment_id": treatment_id}
+                customer_result = conn.execute(text(find_customer_query), params).fetchone()
+                
+                if not customer_result:
+                    return f"Không tìm thấy khách hàng với thông tin: {customer_identifier}. Vui lòng kiểm tra lại số điện thoại, email hoặc ID."
+                
+                # Cập nhật customer_id cho các query tiếp theo
+                params["customer_id"] = customer_result.customer_id
+                
+                # Format kết quả
+                report = "=== BÁO CÁO TIẾN TRÌNH ĐIỀU TRỊ ===\n\n"
+                
+                # Phần 1: Thông tin khách hàng
+                report += "1. THÔNG TIN KHÁCH HÀNG\n"
+                report += f"Tên khách hàng: {customer_result.customer_name}\n"
+                report += f"Số điện thoại: {customer_result.phone}\n"
+                report += f"Email: {customer_result.email}\n"
+                report += f"Độ ưu tiên: {customer_result.care_priority}\n\n"
+                
+                # Phần 2: Tổng quan liệu trình
+                treatments_result = conn.execute(text(treatments_query), params).fetchall()
+                report += "2. TỔNG QUAN LIỆU TRÌNH\n"
+                report += "ID liệu trình,Tên liệu trình,Tổng số buổi,Buổi hiện tại,Tiến độ (%),Ngày bắt đầu,Ngày kết thúc,Giá trị,Trạng thái,Ghi chú\n"
+                
+                for t in treatments_result:
+                    report += f"{t.treatment_id},{t.treatment_name},{t.total_sessions},{t.current_session},"
+                    report += f"{t.completion_percentage},{t.start_date},{t.end_date},{t.price},{t.status},"
+                    report += f"{t.notes if t.notes else '-'}\n"
+                
+                # Phần 3: Chi tiết các buổi điều trị
+                if treatment_id:
+                    sessions_result = conn.execute(text(sessions_query), params).fetchall()
+                    report += "\n3. CHI TIẾT CÁC BUỔI ĐIỀU TRỊ\n"
+                    report += "Buổi số,Ngày điều trị,Sản phẩm sử dụng,Tình trạng da,Phản ứng,Lịch hẹn tiếp theo,"
+                    report += "Ghi chú,Sản phẩm đã bán,Chăm sóc sau điều trị,Hình ảnh trước,Hình ảnh sau\n"
+                    
+                    for s in sessions_result:
+                        report += f"{s.session_number},{s.session_date},{s.products_used},{s.skin_condition},"
+                        report += f"{s.reaction},{s.next_appointment},{s.session_notes},{s.products_sold},"
+                        report += f"{s.after_sales_care},{s.before_images},{s.after_images}\n"
+                
+                return report
+                
+        except SQLAlchemyError as e:
+            return f"Lỗi khi theo dõi tiến trình điều trị: {str(e)}"
+
     def execute_read_query(self, query: str) -> str:
         """
         Execute a read query and return the result in CSV format.
