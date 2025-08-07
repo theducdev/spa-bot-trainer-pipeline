@@ -24,7 +24,6 @@ DATABASE_CONFIG = {
 # Load model từ environment variable
 model_name = os.getenv('EMBEDDING_MODEL')
 embedding_model = SentenceTransformer(model_name)
-# embedding_model = SentenceTransformer('VoVanPhuc/sup-SimCSE-VietNamese-phobert-base')
 
 
 # Cache cho documents từ database
@@ -336,23 +335,58 @@ def search_customer_comprehensive(query):
     }
 
 def retrieve_top_k(query, k):
-
-    # Thử tìm kiếm chính xác khách hàng trước (tên, email, số điện thoại)
+    """
+    Tìm kiếm thông tin với quy trình 2 bước:
+    1. Tìm kiếm keyword trước (exact search cho khách hàng)
+    2. Dùng kết quả keyword để làm semantic search, hoặc semantic search trực tiếp nếu không có keyword
+    """
+    global embeddings_matrix, doc_map
+    
+    if len(embeddings_matrix) == 0:
+        return "❌ Không có dữ liệu embedding trong database. Vui lòng chạy LoadData.py trước."
+    
+    #Thử tìm kiếm chính xác khách hàng trước (keyword search)
     search_result = search_customer_comprehensive(query)
+    
+    # Nếu tìm thấy kết quả keyword, dùng nó làm cơ sở cho semantic search
     if search_result['found']:
         method_name = {
             'email': 'email',
             'phone': 'số điện thoại', 
             'name': 'tên'
         }
-        return f"✅ Đã tìm thấy khách hàng theo {method_name[search_result['method']]}: {search_result['search_term']}\n\n{search_result['content']}"
+        
+        keyword_content = search_result['content']
+        
+        #  Dùng kết quả keyword để làm semantic search
+        # Tạo embedding cho keyword result và query kết hợp
+        combined_query = f"{query} {keyword_content}"
+        query_embedding = embedding_model.encode([combined_query], convert_to_numpy=True)
+        
+        # Tính cosine similarity với tất cả embeddings
+        similarities = cosine_similarity(query_embedding, embeddings_matrix)[0]
+        
+        # Lấy top k indices có similarity cao nhất
+        top_indices = np.argsort(similarities)[::-1][:k]
+        
+        # Lấy văn bản tương ứng
+        results = []
+        
+        # Luôn bao gồm kết quả keyword đầu tiên
+        # results.append(f"🎯 Tìm thấy khách hàng theo {method_name[search_result['method']]}: {search_result['search_term']}\n{keyword_content}")
+        
+        # Thêm các kết quả semantic liên quan (loại bỏ trùng lặp với keyword result)
+        for idx in top_indices[:k-1]:  # Lấy k-1 vì đã có 1 kết quả keyword
+            if idx in doc_map and similarities[idx] > 0.1:
+                content = doc_map[idx]
+                # Kiểm tra không trùng với kết quả keyword
+                if content != keyword_content:
+                    similarity_score = similarities[idx]
+                    results.append(f"📊 Độ tương đồng: {similarity_score:.3f}\n{content}")
+        
+        return '🔍 Kết quả tìm kiếm kết hợp (Keyword + Semantic):\n\n' + '\n\n---\n\n'.join(results)
     
-    # Nếu không tìm thấy chính xác, dùng semantic search với database
-    global embeddings_matrix, doc_map
-    
-    if len(embeddings_matrix) == 0:
-        return "❌ Không có dữ liệu embedding trong database. Vui lòng chạy LoadData.py trước."
-    
+    # Nếu không tìm thấy keyword, dùng semantic search trực tiếp
     # Tạo embedding cho query
     query_embedding = embedding_model.encode([query], convert_to_numpy=True)
     

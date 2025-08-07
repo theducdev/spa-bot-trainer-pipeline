@@ -21,8 +21,8 @@ def get_bot_response():
     # response = handler.process()
     handler = Query(usr_msg)
  
-    response = handler.process_RAG()
-    return jsonify(response)
+    response, retrival_text = handler.process_RAG()
+    return jsonify(response, retrival_text)
 
 if __name__ == "__main__":
     app.run(debug=True)
