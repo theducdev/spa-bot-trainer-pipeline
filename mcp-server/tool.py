@@ -576,6 +576,213 @@ class Tools:
         except SQLAlchemyError as e:
             return f"Lỗi khi theo dõi tiến trình điều trị: {str(e)}"
 
+    def optimize_appointments(self, date_range: str = "today", staff_id: int = None) -> str:
+        """
+        Phân tích và tối ưu hóa lịch hẹn.
+        
+        Args:
+            date_range: Khoảng thời gian phân tích:
+                       - "today": Hôm nay
+                       - "tomorrow": Ngày mai
+                       - "this_week": Tuần này
+                       - "next_week": Tuần sau
+                       - "this_month": Tháng này
+                       - "YYYY-MM-DD": Ngày cụ thể
+            staff_id: ID của nhân viên cần phân tích (tùy chọn)
+            
+        Returns:
+            String chứa báo cáo phân tích lịch hẹn dạng CSV
+        """
+        try:
+            with self._get_engine().connect() as conn:
+                # Xử lý date_range
+                date_conditions = {
+                    "today": "CURRENT_DATE",
+                    "tomorrow": "CURRENT_DATE + INTERVAL '1 day'",
+                    "this_week": "date_trunc('week', CURRENT_DATE)",
+                    "next_week": "date_trunc('week', CURRENT_DATE + INTERVAL '1 week')",
+                    "this_month": "date_trunc('month', CURRENT_DATE)"
+                }
+                
+                if date_range in date_conditions:
+                    date_condition = f"a.appointment_date >= {date_conditions[date_range]}"
+                    if date_range in ["today", "tomorrow"]:
+                        date_condition += f" AND a.appointment_date < {date_conditions[date_range]} + INTERVAL '1 day'"
+                    elif date_range == "this_week":
+                        date_condition += " AND a.appointment_date < date_trunc('week', CURRENT_DATE) + INTERVAL '1 week'"
+                    elif date_range == "next_week":
+                        date_condition += " AND a.appointment_date < date_trunc('week', CURRENT_DATE + INTERVAL '2 week')"
+                    elif date_range == "this_month":
+                        date_condition += " AND a.appointment_date < date_trunc('month', CURRENT_DATE) + INTERVAL '1 month'"
+                else:
+                    # Assume it's a specific date in YYYY-MM-DD format
+                    date_condition = f"a.appointment_date = '{date_range}'"
+                
+                # 1. Tổng quan lịch hẹn
+                overview_query = f"""
+                WITH AppointmentStats AS (
+                    SELECT 
+                        a.appointment_date,
+                        EXTRACT(DOW FROM a.appointment_date) as day_of_week,
+                        EXTRACT(HOUR FROM a.appointment_time) as hour_of_day,
+                        a.status,
+                        c.care_priority,
+                        u.id as staff_id,
+                        u.full_name as staff_name,
+                        COUNT(*) OVER (PARTITION BY a.appointment_date, EXTRACT(HOUR FROM a.appointment_time)) as appointments_per_hour,
+                        COUNT(*) OVER (PARTITION BY a.appointment_date, u.id) as appointments_per_staff_day
+                    FROM appointments a
+                    JOIN customers c ON a.customer_id = c.id
+                    JOIN users u ON a.created_by = u.id
+                    WHERE {date_condition}
+                    {f"AND u.id = {staff_id}" if staff_id else ""}
+                )
+                SELECT 
+                    appointment_date::text,
+                    CASE 
+                        WHEN day_of_week = 0 THEN 'Chủ nhật'
+                        WHEN day_of_week = 1 THEN 'Thứ hai'
+                        WHEN day_of_week = 2 THEN 'Thứ ba'
+                        WHEN day_of_week = 3 THEN 'Thứ tư'
+                        WHEN day_of_week = 4 THEN 'Thứ năm'
+                        WHEN day_of_week = 5 THEN 'Thứ sáu'
+                        WHEN day_of_week = 6 THEN 'Thứ bảy'
+                    END as day_name,
+                    hour_of_day,
+                    COUNT(*) as total_appointments,
+                    SUM(CASE WHEN status = 'confirmed' THEN 1 ELSE 0 END) as confirmed,
+                    SUM(CASE WHEN status = 'cancelled' THEN 1 ELSE 0 END) as cancelled,
+                    SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END) as pending,
+                    SUM(CASE WHEN care_priority = 'urgent' THEN 1 ELSE 0 END) as vip_appointments,
+                    ROUND(AVG(appointments_per_hour), 1) as avg_appointments_per_hour,
+                    MAX(appointments_per_hour) as max_appointments_per_hour,
+                    STRING_AGG(DISTINCT staff_name, ', ') as staff_names,
+                    ROUND(AVG(appointments_per_staff_day), 1) as avg_appointments_per_staff
+                FROM AppointmentStats
+                GROUP BY appointment_date, day_of_week, hour_of_day
+                ORDER BY appointment_date, hour_of_day;
+                """
+                
+                # 2. Phân tích chi tiết theo nhân viên
+                staff_query = f"""
+                WITH StaffStats AS (
+                    SELECT 
+                        u.id as staff_id,
+                        u.full_name as staff_name,
+                        COUNT(*) as total_appointments,
+                        COUNT(DISTINCT a.appointment_date) as working_days,
+                        SUM(CASE WHEN a.status = 'cancelled' THEN 1 ELSE 0 END) as cancelled_appointments,
+                        COUNT(DISTINCT c.id) as unique_customers,
+                        SUM(CASE WHEN c.care_priority = 'urgent' THEN 1 ELSE 0 END) as vip_customers
+                    FROM appointments a
+                    JOIN users u ON a.created_by = u.id
+                    JOIN customers c ON a.customer_id = c.id
+                    WHERE {date_condition}
+                    {f"AND u.id = {staff_id}" if staff_id else ""}
+                    GROUP BY u.id, u.full_name
+                )
+                SELECT 
+                    staff_name,
+                    total_appointments,
+                    working_days,
+                    CAST(ROUND(total_appointments::numeric / NULLIF(working_days, 0), 1) AS TEXT) as avg_appointments_per_day,
+                    cancelled_appointments,
+                    CAST(ROUND(cancelled_appointments * 100.0 / NULLIF(total_appointments, 0), 1) AS TEXT) || '%' as cancellation_rate,
+                    unique_customers,
+                    vip_customers
+                FROM StaffStats
+                ORDER BY total_appointments DESC;
+                """
+                
+                # 3. Phân tích khung giờ hot
+                time_analysis_query = f"""
+                WITH TimeStats AS (
+                    SELECT 
+                        EXTRACT(HOUR FROM a.appointment_time) as hour_of_day,
+                        COUNT(*) as total_appointments,
+                        SUM(CASE WHEN a.status = 'confirmed' THEN 1 ELSE 0 END) as confirmed_appointments,
+                        SUM(CASE WHEN a.status = 'cancelled' THEN 1 ELSE 0 END) as cancelled_appointments,
+                        COUNT(DISTINCT a.customer_id) as unique_customers
+                    FROM appointments a
+                    WHERE {date_condition}
+                    {f"AND a.created_by = {staff_id}" if staff_id else ""}
+                    GROUP BY EXTRACT(HOUR FROM a.appointment_time)
+                )
+                SELECT 
+                    hour_of_day,
+                    total_appointments,
+                    CAST(ROUND(confirmed_appointments * 100.0 / NULLIF(total_appointments, 0), 1) AS TEXT) || '%' as confirmation_rate,
+                    CAST(ROUND(cancelled_appointments * 100.0 / NULLIF(total_appointments, 0), 1) AS TEXT) || '%' as cancellation_rate,
+                    unique_customers,
+                    CASE 
+                        WHEN total_appointments > AVG(total_appointments) OVER () * 1.2 THEN 'Khung giờ cao điểm'
+                        WHEN total_appointments < AVG(total_appointments) OVER () * 0.8 THEN 'Khung giờ thấp điểm'
+                        ELSE 'Khung giờ bình thường'
+                    END as time_slot_status
+                FROM TimeStats
+                ORDER BY total_appointments DESC;
+                """
+                
+                # Thực hiện queries
+                overview_result = conn.execute(text(overview_query)).fetchall()
+                staff_result = conn.execute(text(staff_query)).fetchall()
+                time_analysis_result = conn.execute(text(time_analysis_query)).fetchall()
+                
+                # Format kết quả
+                report = f"=== BÁO CÁO PHÂN TÍCH LỊCH HẸN ===\nKhoảng thời gian: {date_range}\n\n"
+                
+                # Phần 1: Tổng quan theo ngày và giờ
+                report += "1. TỔNG QUAN LỊCH HẸN THEO NGÀY VÀ GIỜ\n"
+                report += "Ngày,Thứ,Giờ,Tổng số hẹn,Đã xác nhận,Đã hủy,Đang chờ,Khách VIP,TB hẹn/giờ,Tối đa hẹn/giờ,Nhân viên,TB hẹn/nhân viên\n"
+                for row in overview_result:
+                    report += f"{row[0]},{row[1]},{row[2]},{row[3]},{row[4]},{row[5]},{row[6]},{row[7]},{row[8]},{row[9]},{row[10]},{row[11]}\n"
+                
+                # Phần 2: Phân tích theo nhân viên
+                report += "\n2. PHÂN TÍCH THEO NHÂN VIÊN\n"
+                report += "Nhân viên,Tổng số hẹn,Số ngày làm việc,TB hẹn/ngày,Số hẹn hủy,Tỷ lệ hủy,Số khách unique,Số khách VIP\n"
+                for row in staff_result:
+                    report += f"{row[0]},{row[1]},{row[2]},{row[3]},{row[4]},{row[5]},{row[6]},{row[7]}\n"
+                
+                # Phần 3: Phân tích khung giờ
+                report += "\n3. PHÂN TÍCH KHUNG GIỜ\n"
+                report += "Giờ,Tổng số hẹn,Tỷ lệ xác nhận,Tỷ lệ hủy,Số khách unique,Trạng thái khung giờ\n"
+                for row in time_analysis_result:
+                    report += f"{row[0]},{row[1]},{row[2]},{row[3]},{row[4]},{row[5]}\n"
+                
+                # Thêm các đề xuất tối ưu
+                report += "\n=== ĐỀ XUẤT TỐI ƯU ===\n"
+                
+                # Phân tích khung giờ cao điểm
+                peak_hours = [row for row in time_analysis_result if row[5] == 'Khung giờ cao điểm']
+                if peak_hours:
+                    report += "1. Khung giờ cao điểm:\n"
+                    for hour in peak_hours:
+                        report += f"   - {hour[0]}h: {hour[1]} lịch hẹn, tỷ lệ hủy {hour[3]}\n"
+                    report += "   Đề xuất: Tăng cường nhân viên trong các khung giờ này\n"
+                
+                # Phân tích tỷ lệ hủy hẹn
+                high_cancel_staff = [row for row in staff_result if float(row[5].strip('%')) > 20]
+                if high_cancel_staff:
+                    report += "\n2. Nhân viên có tỷ lệ hủy hẹn cao (>20%):\n"
+                    for staff in high_cancel_staff:
+                        report += f"   - {staff[0]}: {staff[5]} tỷ lệ hủy\n"
+                    report += "   Đề xuất: Kiểm tra nguyên nhân và cải thiện quy trình xác nhận lịch hẹn\n"
+                
+                # Đề xuất cân bằng tải
+                workload_stats = [(row[0], float(row[3])) for row in staff_result if row[3] != '-']
+                if workload_stats:
+                    avg_workload = sum(load for _, load in workload_stats) / len(workload_stats)
+                    overloaded_staff = [name for name, load in workload_stats if load > avg_workload * 1.2]
+                    if overloaded_staff:
+                        report += "\n3. Cân bằng tải:\n"
+                        report += f"   - Nhân viên đang quá tải: {', '.join(overloaded_staff)}\n"
+                        report += "   Đề xuất: Phân bổ lại lịch hẹn đều hơn giữa các nhân viên\n"
+                
+                return report
+                
+        except SQLAlchemyError as e:
+            return f"Lỗi khi phân tích lịch hẹn: {str(e)}"
+
     def execute_read_query(self, query: str) -> str:
         """
         Execute a read query and return the result in CSV format.
