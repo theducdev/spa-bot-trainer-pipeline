@@ -150,6 +150,19 @@ def process_data(data: List[Dict[str, Any]], source: str = 'upload') -> tuple:
             'status_class': 'info'
         })
         
+        # Gửi thông báo thành công với stats nếu là webhook
+        if source == 'webhook':
+            send_event('webhook', {
+                'status': 'Success',
+                'message': 'Xử lý dữ liệu từ Google Sheets thành công',
+                'status_class': 'success',
+                'stats': {
+                    'total_raw': len(data),
+                    'total_normalized': len(normalized_data),
+                    'invalid': len(data) - len(normalized_data)
+                }
+            })
+        
         return jsonl_path, None
     except Exception as e:
         return None, str(e)
@@ -283,12 +296,6 @@ def sheets_webhook():
                 'status_class': 'danger'
             })
             return jsonify({"error": error}), 500
-                
-        send_event('webhook', {
-            'status': 'Training',
-            'message': f'Đã xử lý xong. Bắt đầu fine-tune...',
-            'status_class': 'info'
-        })
         
         # Demo fine-tune
         threading.Thread(target=demo_finetune, args=(jsonl_path,)).start()
@@ -309,6 +316,13 @@ def sheets_webhook():
 
 def demo_finetune(jsonl_path: str):
     """Demo quá trình fine-tune với LoRA"""
+    # Thông báo bắt đầu training
+    send_event('training', {
+        'status': 'Started',
+        'message': 'Bắt đầu quá trình training model...',
+        'progress': 0,
+        'status_class': 'info'
+    })
     steps = [
         ('Initializing', 'Khởi tạo model và tokenizer...'),
         ('Loading', 'Đang tải model Llama-2-7B...'),

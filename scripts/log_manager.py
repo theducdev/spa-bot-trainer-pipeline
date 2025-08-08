@@ -2,6 +2,7 @@ import json
 import os
 from datetime import datetime
 from typing import Dict, List, Optional, Any
+from telegram_notifier import notifier
 
 class LogManager:
     def __init__(self, log_dir: str):
@@ -56,6 +57,10 @@ class LogManager:
         
         # Cập nhật trạng thái hiện tại
         self._update_current_status(log_type, data)
+        
+        # Gửi thông báo Telegram cho webhook và training
+        if log_type in ['webhook', 'training']:
+            self._send_telegram_notification(log_type, data)
 
     def get_logs(self, log_type: Optional[str] = None) -> Dict[str, List[Dict[str, Any]]]:
         """Lấy tất cả logs hoặc logs của một loại cụ thể"""
@@ -158,3 +163,54 @@ class LogManager:
         """Ghi dữ liệu đã xử lý vào file"""
         with open(self.processed_data_file, 'w', encoding='utf-8') as f:
             json.dump(data, f, ensure_ascii=False, indent=2)
+            
+    def _send_telegram_notification(self, log_type: str, data: Dict[str, Any]) -> None:
+        """Gửi thông báo qua Telegram dựa trên loại log và dữ liệu"""
+        if log_type == 'webhook':
+            if data.get('status') == 'Success':
+                stats = data.get('stats', {})
+                message = (
+                    "🔔 <b>Webhook Update</b>\n\n"
+                    f"✅ Nhận dữ liệu mới từ Google Sheets\n"
+                    f"📊 Thống kê:\n"
+                    f"- Tổng số mẫu: {stats.get('total_raw', 0)}\n"
+                    f"- Mẫu hợp lệ: {stats.get('total_normalized', 0)}\n"
+                    f"- Mẫu không hợp lệ: {stats.get('invalid', 0)}\n\n"
+                    f"💬 Chi tiết: {data.get('message', '')}"
+                )
+                notifier.send_message(message)
+            elif data.get('status') == 'Error':
+                message = (
+                    "🔔 <b>Webhook Error</b>\n\n"
+                    f"❌ {data.get('message', 'Có lỗi xảy ra trong quá trình xử lý webhook')}"
+                )
+                notifier.send_message(message)
+
+        elif log_type == 'training':
+            status = data.get('status', '')
+            if status == 'Started':
+                message = (
+                    "🔔 <b>Training Started</b>\n\n"
+                    "🚀 Bắt đầu quá trình training model..."
+                )
+                notifier.send_message(message)
+            elif status == 'Completed':
+                message = (
+                    "🔔 <b>Training Completed</b>\n\n"
+                    "✅ Quá trình training đã hoàn thành thành công!"
+                )
+                notifier.send_message(message)
+            elif status == 'Error':
+                message = (
+                    "🔔 <b>Training Error</b>\n\n"
+                    f"❌ {data.get('message', 'Có lỗi xảy ra trong quá trình training')}"
+                )
+                notifier.send_message(message)
+            elif 'progress' in data:
+                progress = data.get('progress', 0)
+                if progress > 0 and progress % 25 == 0:  # Thông báo mỗi 25%
+                    message = (
+                        "🔔 <b>Training Progress</b>\n\n"
+                        f"📊 Tiến độ: {progress}%"
+                    )
+                    notifier.send_message(message)
