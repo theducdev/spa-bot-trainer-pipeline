@@ -1,1 +1,539 @@
- 
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SPA Bot Trainer</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <style>
+        .upload-area {
+            border: 2px dashed #ddd;
+            border-radius: 8px;
+            padding: 20px;
+            text-align: center;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+        .upload-area:hover {
+            border-color: #0d6efd;
+            background-color: #f8f9fa;
+        }
+        .log-area {
+            background-color: #f8f9fa;
+            border-radius: 8px;
+            padding: 15px;
+            max-height: 400px;
+            overflow-y: auto;
+            font-family: monospace;
+        }
+        .status-badge {
+            position: absolute;
+            top: 10px;
+            right: 10px;
+        }
+        .webhook-status {
+            position: fixed;
+            bottom: 20px;
+            right: 20px;
+            z-index: 1000;
+        }
+        .train-progress {
+            height: 25px;
+        }
+        .log-entry {
+            padding: 5px 0;
+            border-bottom: 1px solid #eee;
+        }
+        .log-entry:last-child {
+            border-bottom: none;
+        }
+        .log-time {
+            color: #666;
+            font-size: 0.85em;
+        }
+        .log-message {
+            margin-left: 10px;
+        }
+        .log-success { color: #198754; }
+        .log-error { color: #dc3545; }
+        .log-info { color: #0dcaf0; }
+        .log-warning { color: #ffc107; }
+        .data-preview {
+            max-height: 500px;
+            overflow-y: auto;
+        }
+        .data-item {
+            border: 1px solid #eee;
+            border-radius: 4px;
+            margin-bottom: 10px;
+            padding: 10px;
+        }
+        .data-item:hover {
+            background-color: #f8f9fa;
+        }
+        .data-role {
+            font-weight: bold;
+            color: #0d6efd;
+        }
+        .data-content {
+            margin-left: 20px;
+            white-space: pre-wrap;
+        }
+        .stats-card {
+            background-color: #f8f9fa;
+            border-radius: 8px;
+            padding: 15px;
+            margin-bottom: 20px;
+        }
+        .stats-item {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 10px;
+        }
+        .stats-label {
+            color: #666;
+        }
+        .stats-value {
+            font-weight: bold;
+        }
+        .invalid-data {
+            color: #dc3545;
+        }
+    </style>
+</head>
+<body>
+    <div class="container py-5">
+        <div class="row justify-content-center">
+            <div class="col-md-10">
+                <div class="card shadow">
+                    <div class="card-body">
+                        <h3 class="card-title text-center mb-4">SPA Bot Trainer</h3>
+                        
+                        <!-- Tabs -->
+                        <ul class="nav nav-tabs mb-4" id="myTab" role="tablist">
+                            <li class="nav-item" role="presentation">
+                                <button class="nav-link active" id="upload-tab" data-bs-toggle="tab" data-bs-target="#upload" type="button" role="tab">Upload File</button>
+                            </li>
+                            <li class="nav-item" role="presentation">
+                                <button class="nav-link" id="webhook-tab" data-bs-toggle="tab" data-bs-target="#webhook" type="button" role="tab">Webhook Status</button>
+                            </li>
+                            <li class="nav-item" role="presentation">
+                                <button class="nav-link" id="training-tab" data-bs-toggle="tab" data-bs-target="#training" type="button" role="tab">Training Status</button>
+                            </li>
+                            <li class="nav-item" role="presentation">
+                                <button class="nav-link" id="data-tab" data-bs-toggle="tab" data-bs-target="#data" type="button" role="tab">Processed Data</button>
+                            </li>
+                        </ul>
+
+                        <!-- Tab Content -->
+                        <div class="tab-content" id="myTabContent">
+                            <!-- Upload Tab -->
+                            <div class="tab-pane fade show active" id="upload" role="tabpanel">
+                                <div class="upload-area mb-4" id="uploadArea">
+                                    <div class="py-3">
+                                        <i class="fas fa-cloud-upload-alt fa-3x text-primary mb-3"></i>
+                                        <h5>Kéo thả hoặc chọn file</h5>
+                                        <p class="text-muted mb-0">Hỗ trợ file .csv, .xlsx</p>
+                                    </div>
+                                    <input type="file" id="fileInput" class="d-none" accept=".csv,.xlsx">
+                                </div>
+
+                                <div class="progress mb-4 d-none" id="uploadProgress">
+                                    <div class="progress-bar progress-bar-striped progress-bar-animated" role="progressbar"></div>
+                                </div>
+                            </div>
+
+                            <!-- Webhook Tab -->
+                            <div class="tab-pane fade" id="webhook" role="tabpanel">
+                                <div class="alert alert-info">
+                                    <strong>Webhook URL:</strong>
+                                    <code id="webhookUrl">http://your-domain/webhook/sheets</code>
+                                    <button class="btn btn-sm btn-outline-primary ms-2" onclick="copyWebhookUrl()">Copy</button>
+                                </div>
+                                
+                                <div class="card mb-3">
+                                    <div class="card-header d-flex justify-content-between align-items-center">
+                                        <span>Webhook Status</span>
+                                        <div>
+                                            <button class="btn btn-sm btn-outline-danger me-2" onclick="clearLogs('webhook')">Clear Logs</button>
+                                            <span class="badge bg-secondary" id="webhookStatus">Waiting</span>
+                                        </div>
+                                    </div>
+                                    <div class="card-body">
+                                        <div class="log-area" id="webhookLogs"></div>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- Training Tab -->
+                            <div class="tab-pane fade" id="training" role="tabpanel">
+                                <div class="card mb-3">
+                                    <div class="card-header d-flex justify-content-between align-items-center">
+                                        <span>Training Progress</span>
+                                        <div>
+                                            <button class="btn btn-sm btn-outline-danger me-2" onclick="clearLogs('training')">Clear Logs</button>
+                                            <span class="badge bg-secondary" id="trainingStatus">Not Started</span>
+                                        </div>
+                                    </div>
+                                    <div class="card-body">
+                                        <div class="progress train-progress mb-3">
+                                            <div class="progress-bar" role="progressbar" id="trainingProgress" style="width: 0%">0%</div>
+                                        </div>
+                                        <div class="log-area" id="trainingLogs"></div>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- Data Tab -->
+                            <div class="tab-pane fade" id="data" role="tabpanel">
+                                <div class="stats-card">
+                                    <h5 class="mb-3">Thống kê dữ liệu</h5>
+                                    <div id="dataStats">
+                                        <div class="text-muted">Chưa có dữ liệu...</div>
+                                    </div>
+                                </div>
+                                
+                                <div class="card mb-3">
+                                    <div class="card-header d-flex justify-content-between align-items-center">
+                                        <span>Dữ liệu đã xử lý</span>
+                                        <div class="btn-group">
+                                            <button class="btn btn-sm btn-outline-primary" onclick="toggleView('normalized')">Normalized</button>
+                                            <button class="btn btn-sm btn-outline-secondary" onclick="toggleView('raw')">Raw</button>
+                                        </div>
+                                    </div>
+                                    <div class="card-body">
+                                        <div class="data-preview" id="dataPreview">
+                                            <div class="text-muted">Chưa có dữ liệu...</div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Global Status -->
+                        <div class="toast webhook-status" role="alert" id="webhookToast">
+                            <div class="toast-header">
+                                <strong class="me-auto">Webhook Notification</strong>
+                                <button type="button" class="btn-close" data-bs-dismiss="toast"></button>
+                            </div>
+                            <div class="toast-body" id="webhookToastBody"></div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+    <script>
+        // Khởi tạo các biến global
+        let eventSource = null;
+        const webhookLogs = document.getElementById('webhookLogs');
+        const trainingLogs = document.getElementById('trainingLogs');
+        const webhookStatus = document.getElementById('webhookStatus');
+        const trainingStatus = document.getElementById('trainingStatus');
+        const trainingProgress = document.getElementById('trainingProgress');
+        const webhookToast = document.getElementById('webhookToast');
+        const toast = new bootstrap.Toast(webhookToast);
+
+        let currentDataView = 'normalized';
+        let currentData = null;
+
+        // Khôi phục logs khi load trang
+        async function restoreLogs() {
+            try {
+                const response = await fetch('/logs');
+                const logs = await response.json();
+                
+                // Khôi phục logs cho từng tab
+                for (const [type, typeLog] of Object.entries(logs)) {
+                    typeLog.forEach(log => {
+                        appendLogEntry(type, log);
+                    });
+                }
+                
+                // Cập nhật trạng thái
+                updateStatus('webhook', logs.webhook[logs.webhook.length - 1]);
+                updateStatus('training', logs.training[logs.training.length - 1]);
+                updateStatus('upload', logs.upload[logs.upload.length - 1]);
+            } catch (error) {
+                console.error('Error restoring logs:', error);
+            }
+        }
+
+        // Hàm cập nhật thống kê
+        function updateStats(data) {
+            if (!data || !data.stats) {
+                document.getElementById('dataStats').innerHTML = '<div class="text-muted">Chưa có dữ liệu...</div>';
+                return;
+            }
+
+            const stats = data.stats;
+            document.getElementById('dataStats').innerHTML = `
+                <div class="stats-item">
+                    <span class="stats-label">Tổng số mẫu gốc:</span>
+                    <span class="stats-value">${stats.total_raw}</span>
+                </div>
+                <div class="stats-item">
+                    <span class="stats-label">Số mẫu hợp lệ:</span>
+                    <span class="stats-value text-success">${stats.total_normalized}</span>
+                </div>
+                <div class="stats-item">
+                    <span class="stats-label">Số mẫu không hợp lệ:</span>
+                    <span class="stats-value ${stats.invalid > 0 ? 'text-danger' : ''}">${stats.invalid}</span>
+                </div>
+                <div class="stats-item">
+                    <span class="stats-label">Nguồn dữ liệu:</span>
+                    <span class="stats-value">${data.source}</span>
+                </div>
+                <div class="stats-item">
+                    <span class="stats-label">Thời gian xử lý:</span>
+                    <span class="stats-value">${data.timestamp}</span>
+                </div>
+                <div class="stats-item">
+                    <span class="stats-label">File đã lưu:</span>
+                    <span class="stats-value">${data.file_path}</span>
+                </div>
+            `;
+        }
+
+        // Hàm hiển thị dữ liệu
+        function displayData(data, type) {
+            const preview = document.getElementById('dataPreview');
+            if (!data || (!data.normalized && !data.raw)) {
+                preview.innerHTML = '<div class="text-muted">Chưa có dữ liệu...</div>';
+                return;
+            }
+
+            const displayData = type === 'normalized' ? data.normalized : data.raw;
+            
+            preview.innerHTML = displayData.map((item, index) => {
+                if (type === 'normalized') {
+                    return `
+                        <div class="data-item">
+                            <div class="mb-2">
+                                <span class="badge bg-secondary">Mẫu #${index + 1}</span>
+                            </div>
+                            ${item.messages.map(msg => `
+                                <div class="mb-2">
+                                    <span class="data-role">${msg.role}:</span>
+                                    <div class="data-content">${msg.content}</div>
+                                </div>
+                            `).join('')}
+                        </div>
+                    `;
+                } else {
+                    return `
+                        <div class="data-item">
+                            <div class="mb-2">
+                                <span class="badge bg-secondary">Mẫu #${index + 1}</span>
+                            </div>
+                            <div class="mb-2">
+                                <span class="data-role">user_message:</span>
+                                <div class="data-content">${item.user_message}</div>
+                            </div>
+                            <div class="mb-2">
+                                <span class="data-role">assistant_message:</span>
+                                <div class="data-content">${item.assistant_message}</div>
+                            </div>
+                        </div>
+                    `;
+                }
+            }).join('');
+        }
+
+        // Hàm chuyển đổi view
+        function toggleView(type) {
+            currentDataView = type;
+            if (currentData) {
+                displayData(currentData, type);
+            }
+        }
+
+        // Hàm lấy dữ liệu đã xử lý
+        async function fetchProcessedData() {
+            try {
+                const response = await fetch('/processed-data');
+                const data = await response.json();
+                
+                if (data && (data.normalized || data.raw)) {
+                    currentData = data;
+                    updateStats(data);
+                    displayData(data, currentDataView);
+                }
+            } catch (error) {
+                console.error('Error fetching processed data:', error);
+            }
+        }
+
+        function appendLogEntry(type, data) {
+            const logArea = type === 'webhook' ? webhookLogs :
+                          type === 'training' ? trainingLogs : null;
+            
+            if (!logArea) return;
+            
+            const logEntry = document.createElement('div');
+            logEntry.className = 'log-entry';
+            logEntry.innerHTML = `
+                <span class="log-time">[${data.timestamp || new Date().toLocaleTimeString()}]</span>
+                <span class="log-message ${data.message_class || ''}">${data.message}</span>
+            `;
+            logArea.appendChild(logEntry);
+            logArea.scrollTop = logArea.scrollHeight;
+        }
+
+        function updateStatus(type, data) {
+            if (!data) return;
+            
+            switch(type) {
+                case 'webhook':
+                    webhookStatus.textContent = data.status;
+                    webhookStatus.className = `badge bg-${data.status_class || 'secondary'}`;
+                    break;
+                case 'training':
+                    trainingStatus.textContent = data.status;
+                    trainingStatus.className = `badge bg-${data.status_class || 'secondary'}`;
+                    if (data.progress !== undefined) {
+                        trainingProgress.style.width = `${data.progress}%`;
+                        trainingProgress.textContent = `${data.progress}%`;
+                    }
+                    break;
+                case 'upload':
+                    const progress = document.getElementById('uploadProgress');
+                    if (data.progress !== undefined) {
+                        progress.classList.remove('d-none');
+                        progress.querySelector('.progress-bar').style.width = `${data.progress}%`;
+                    }
+                    break;
+            }
+        }
+
+        // Xử lý các sự kiện
+        function handleEvent(data) {
+            const type = data.type;
+            delete data.type;
+            
+            if (type === 'data') {
+                // Có dữ liệu mới, cập nhật tab Data
+                fetchProcessedData();
+            }
+            
+            appendLogEntry(type, data);
+            updateStatus(type, data);
+            
+            if (type === 'webhook') {
+                document.getElementById('webhookToastBody').textContent = data.message;
+                toast.show();
+            }
+        }
+
+        // Clear logs
+        async function clearLogs(type) {
+            try {
+                await fetch('/logs/clear', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ type })
+                });
+                
+                // Clear UI
+                const logArea = type === 'webhook' ? webhookLogs :
+                              type === 'training' ? trainingLogs : null;
+                
+                if (logArea) {
+                    logArea.innerHTML = '<div class="text-muted">Logs đã được xóa...</div>';
+                }
+                
+                // Reset status
+                updateStatus(type, {
+                    status: 'Not Started',
+                    message: 'Chưa có hoạt động',
+                    status_class: 'secondary',
+                    progress: 0
+                });
+            } catch (error) {
+                console.error('Error clearing logs:', error);
+            }
+        }
+
+        // Kết nối SSE
+        function connectSSE() {
+            eventSource = new EventSource('/events');
+            
+            eventSource.onmessage = function(event) {
+                const data = JSON.parse(event.data);
+                handleEvent(data);
+            };
+            
+            eventSource.onerror = function() {
+                console.log('SSE Connection failed. Retrying...');
+                setTimeout(connectSSE, 5000);
+            };
+        }
+
+        // Upload handling
+        const uploadArea = document.getElementById('uploadArea');
+        const fileInput = document.getElementById('fileInput');
+
+        uploadArea.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            uploadArea.style.borderColor = '#0d6efd';
+        });
+
+        uploadArea.addEventListener('dragleave', (e) => {
+            e.preventDefault();
+            uploadArea.style.borderColor = '#ddd';
+        });
+
+        uploadArea.addEventListener('drop', (e) => {
+            e.preventDefault();
+            handleFiles(e.dataTransfer.files);
+        });
+
+        uploadArea.addEventListener('click', () => fileInput.click());
+        fileInput.addEventListener('change', (e) => handleFiles(e.target.files));
+
+        function handleFiles(files) {
+            if (files.length > 0) {
+                uploadFile(files[0]);
+            }
+        }
+
+        async function uploadFile(file) {
+            const formData = new FormData();
+            formData.append('file', file);
+
+            try {
+                const response = await fetch('/upload', {
+                    method: 'POST',
+                    body: formData
+                });
+                const result = await response.json();
+                
+                if (result.status === 'success') {
+                    // Switch to training tab
+                    document.getElementById('training-tab').click();
+                }
+            } catch (error) {
+                console.error('Upload error:', error);
+            }
+        }
+
+        // Copy webhook URL
+        function copyWebhookUrl() {
+            const url = document.getElementById('webhookUrl').textContent;
+            navigator.clipboard.writeText(url);
+            alert('Webhook URL copied to clipboard!');
+        }
+
+        // Khởi tạo khi trang được load
+        document.addEventListener('DOMContentLoaded', () => {
+            restoreLogs();
+            connectSSE();
+            fetchProcessedData();
+        });
+    </script>
+</body>
+</html>
