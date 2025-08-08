@@ -372,6 +372,17 @@
             
             if (!logArea) return;
             
+            // Kiểm tra xem log entry đã tồn tại chưa
+            const existingEntries = logArea.querySelectorAll('.log-entry');
+            for (const entry of existingEntries) {
+                const timeSpan = entry.querySelector('.log-time');
+                const messageSpan = entry.querySelector('.log-message');
+                if (timeSpan.textContent === `[${data.timestamp}]` && 
+                    messageSpan.textContent === data.message) {
+                    return; // Skip nếu log entry đã tồn tại
+                }
+            }
+            
             const logEntry = document.createElement('div');
             logEntry.className = 'log-entry';
             logEntry.innerHTML = `
@@ -460,6 +471,11 @@
 
         // Kết nối SSE
         function connectSSE() {
+            // Đóng kết nối cũ nếu có
+            if (eventSource) {
+                eventSource.close();
+            }
+            
             eventSource = new EventSource('/events');
             
             eventSource.onmessage = function(event) {
@@ -469,6 +485,9 @@
             
             eventSource.onerror = function() {
                 console.log('SSE Connection failed. Retrying...');
+                if (eventSource) {
+                    eventSource.close();
+                }
                 setTimeout(connectSSE, 5000);
             };
         }
@@ -527,6 +546,17 @@
             navigator.clipboard.writeText(url);
             alert('Webhook URL copied to clipboard!');
         }
+
+        // Xử lý sự kiện khi chuyển tab
+        document.querySelectorAll('button[data-bs-toggle="tab"]').forEach(button => {
+            button.addEventListener('shown.bs.tab', function (e) {
+                const targetId = e.target.getAttribute('data-bs-target').substring(1);
+                if (targetId === 'webhook' || targetId === 'training') {
+                    // Tải lại logs khi chuyển sang tab webhook hoặc training
+                    restoreLogs();
+                }
+            });
+        });
 
         // Khởi tạo khi trang được load
         document.addEventListener('DOMContentLoaded', () => {
