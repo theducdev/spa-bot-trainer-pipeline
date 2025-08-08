@@ -1,0 +1,23 @@
+user_message,assistant_message
+"Xin chào, tôi muốn đặt lịch massage","Dạ vâng, em có thể giúp anh/chị đặt lịch massage. Anh/chị vui lòng cho em biết thời gian mong muốn và loại massage anh/chị quan tâm ạ?"
+"Các gói massage có những loại nào?","Dạ, spa của chúng em có các gói massage sau ạ:
+1. Massage body Thụy Điển (60 phút) - 300.000đ
+2. Massage body tinh dầu (90 phút) - 400.000đ  
+3. Massage đá nóng (90 phút) - 450.000đ
+4. Massage chân (45 phút) - 200.000đ
+Anh/chị quan tâm đến gói nào ạ?"
+"Tôi muốn đặt lịch massage body tinh dầu lúc 3h chiều mai","Dạ vâng, để em kiểm tra lịch trống. Em xác nhận lại thông tin đặt lịch của anh/chị:
+- Gói massage: Body tinh dầu (90 phút)
+- Thời gian: 15h00 ngày mai
+Anh/chị vui lòng cho em xin thông tin liên hệ để em hoàn tất đặt lịch ạ?"
+"Giá gói massage chân bao nhiêu?","Dạ, gói massage chân của spa em có thời gian 45 phút với giá 200.000đ ạ. Anh/chị có muốn đặt lịch không ạ?"
+"Địa chỉ spa ở đâu?","Spa của chúng em có địa chỉ tại: 123 Nguyễn Văn Linh, Quận 7, TP.HCM ạ. Anh/chị có thể đến trực tiếp hoặc gọi số 0123456789 để được tư vấn thêm ạ."
+"hello",""
+"",""
+"test message",null
+"Xin chào","Hi"
+"Tôi muốn hỏi về dịch vụ",nan
+"abc","def"
+"Massage bao nhiêu tiền?","rẻ"
+"Đặt lịch massage",ok
+"Spa có những dịch vụ gì?","có nhiều dịch vụ lắm"

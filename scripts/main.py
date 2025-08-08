@@ -343,65 +343,16 @@ def demo_finetune(jsonl_path: str):
         time.sleep(1)  # Giả lập thời gian xử lý
     
     # In thông tin training
-    print("\n[DEMO] Fine-tuning với LoRA")
-    print("=" * 50)
-    print(f"""
-# 1. Chuẩn bị dữ liệu
-training_data = "{jsonl_path}"
-
-# 2. Khởi tạo model và tokenizer
-from transformers import AutoModelForCausalLM, AutoTokenizer
-model = AutoModelForCausalLM.from_pretrained(
-    "TheBloke/Llama-2-7B-Chat-GGUF",
-    device_map="auto",
-    trust_remote_code=True
-)
-tokenizer = AutoTokenizer.from_pretrained("TheBloke/Llama-2-7B-Chat-GGUF")
-
-# 3. Cấu hình LoRA
-from peft import LoraConfig, get_peft_model
-
-lora_config = LoraConfig(
-    r=8,                     # Rank của ma trận LoRA
-    lora_alpha=32,          # Alpha scaling
-    target_modules=["q_proj", "v_proj"],  # Các layer cần fine-tune
-    lora_dropout=0.05,
-    bias="none",
-    task_type="CAUSAL_LM"
-)
-
-# 4. Áp dụng LoRA
-model = get_peft_model(model, lora_config)
-
-# 5. Training arguments
-from transformers import TrainingArguments
-
-training_args = TrainingArguments(
-    output_dir="./lora_spa_bot",
-    num_train_epochs=3,
-    per_device_train_batch_size=4,
-    gradient_accumulation_steps=4,
-    learning_rate=2e-4,
-    fp16=True,
-    logging_steps=10,
-    save_strategy="epoch"
-)
-
-# 6. Khởi tạo Trainer
-from transformers import Trainer
-import datasets
-
-dataset = datasets.load_dataset("json", data_files=training_data)
-
-trainer = Trainer(
-    model=model,
-    args=training_args,
-    train_dataset=dataset["train"],
-)
-
-# 7. Bắt đầu training
-# trainer.train()
-""")
+    print("\n[DEMO] Fine-tuning Process")
+    print("=" * 30)
+    print(f"Training data: {jsonl_path}")
+    print("Model: QWEN3:4B")
+    print("Method: LoRA fine-tuning")
+    print("Parameters:")
+    print("  - Epochs: 3")
+    print("  - Batch size: 4")
+    print("  - Learning rate: 2e-4")
+    print("=" * 30)
     print("=" * 50)
     
     send_event('training', {
